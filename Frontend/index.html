@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Doctor's Console - ACKO MER</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .checklist-item.active { background-color: #1e40af; color: white; }
+        .sentiment-badge { padding: 2px 8px; border-radius: 12px; font-size: 0.75rem; font-weight: 600; margin-left: 8px; }
+        .sentiment-Positive { background-color: #166534; color: #dcfce7; }
+        .sentiment-Negative { background-color: #991b1b; color: #fee2e2; }
+        .sentiment-Neutral { background-color: #4b5563; color: #e5e7eb; }
+        #summary-modal-content { max-height: 80vh; }
+    </style>
+</head>
+<body class="bg-gray-900 text-white flex flex-col items-center justify-center min-h-screen p-4">
+
+    <!-- Initial Setup View -->
+    <div id="setup" class="w-full max-w-md text-center">
+        <h1 class="text-4xl font-bold mb-2">ACKO Doctor's Console</h1>
+        <p class="text-gray-400 mb-8">AI-Powered Medical Examination Reports</p>
+        <div class="space-y-4">
+            <button id="create-btn" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-lg transition-colors">Create New Consultation Room</button>
+        </div>
+        <div id="link-container" class="mt-6 hidden">
+            <p class="text-gray-300">Share this link with the patient:</p>
+            <div class="mt-2 flex items-center bg-gray-800 p-2 rounded-lg">
+                <input id="patient-link" type="text" class="bg-transparent text-white w-full border-0 focus:ring-0" readonly>
+                <button id="copy-btn" class="ml-2 bg-gray-600 hover:bg-gray-500 text-white font-bold py-2 px-3 rounded-lg"><i class="fas fa-copy"></i></button>
+            </div>
+            <button id="start-call-btn" class="mt-4 w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-4 rounded-lg transition-colors">Start Call</button>
+        </div>
+    </div>
+
+    <!-- Main Consultation View -->
+    <div id="consultation" class="hidden w-full h-full max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-4" style="height: 95vh;">
+        <!-- Left Panel: Video & Checklist -->
+        <div class="flex flex-col space-y-4">
+            <div class="flex-grow bg-black rounded-lg shadow-xl overflow-hidden relative aspect-video">
+                <video id="remoteVideo" autoplay playsinline class="w-full h-full object-cover"></video>
+                <video id="localVideo" autoplay playsinline muted class="absolute bottom-4 right-4 w-1/4 max-w-[150px] h-auto border-2 border-gray-700 rounded-md"></video>
+            </div>
+            <div id="checklist" class="bg-gray-800 p-4 rounded-lg">
+                <h3 class="font-bold mb-3 text-lg">Consultation Checklist</h3>
+                <!-- Checklist items will be injected here by JS -->
+            </div>
+             <button id="summary-btn" class="w-full bg-purple-600 hover:bg-purple-700 text-white font-bold py-3 px-4 rounded-lg transition-colors">Generate Summary</button>
+        </div>
+
+        <!-- Right Panel: Transcript & AI Suggestions -->
+        <div class="lg:col-span-2 bg-gray-800 p-4 rounded-lg flex flex-col">
+            <h3 class="font-bold mb-3 text-lg flex items-center"><i class="fas fa-comment-dots mr-2"></i>Live Transcript</h3>
+            <div id="transcript" class="flex-grow bg-gray-900/50 p-3 rounded-md overflow-y-auto mb-4 space-y-2"></div>
+            
+            <h3 class="font-bold mb-3 text-lg flex items-center"><i class="fas fa-lightbulb mr-2"></i>AI Suggested Questions</h3>
+            <div id="questions" class="h-40 bg-gray-900/50 p-3 rounded-md overflow-y-auto space-y-2">
+                 <p class="text-gray-400">Suggestions will appear here based on the patient's responses...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Summary Modal -->
+    <div id="summary-modal" class="hidden fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center p-4 z-50">
+        <div class="bg-gray-800 rounded-lg p-6 w-full max-w-2xl">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-2xl font-bold">Consultation Summary</h2>
+                <button id="close-summary-btn" class="text-gray-400 hover:text-white">&times;</button>
+            </div>
+            <div id="summary-modal-content" class="bg-gray-900 p-4 rounded-md overflow-y-auto prose prose-invert max-w-none">
+                <!-- Summary content will be injected here -->
+            </div>
+        </div>
+    </div>
+
+<script>
+    // --- Element References ---
+    const setupEl = document.getElementById('setup');
+    const consultationEl = document.getElementById('consultation');
+    const createBtn = document.getElementById('create-btn');
+    const linkContainer = document.getElementById('link-container');
+    const patientLinkInput = document.getElementById('patient-link');
+    const copyBtn = document.getElementById('copy-btn');
+    const startCallBtn = document.getElementById('start-call-btn');
+    const localVideo = document.getElementById('localVideo');
+    const remoteVideo = document.getElementById('remoteVideo');
+    const transcriptEl = document.getElementById('transcript');
+    const questionsEl = document.getElementById('questions');
+    const checklistEl = document.getElementById('checklist');
+    const summaryBtn = document.getElementById('summary-btn');
+    const summaryModal = document.getElementById('summary-modal');
+    const summaryModalContent = document.getElementById('summary-modal-content');
+    const closeSummaryBtn = document.getElementById('close-summary-btn');
+
+
+    // --- Global State ---
+    let room, transSocket, signalSocket, peerConnection, audioCtx;
+    const checklistItems = [
+        "Introduction", "Basic Information", "Lifestyle Assessment", "Medical History", 
+        "Recent Health Status", "Hospitalization History", "Vision Assessment", 
+        "Additional Health Concerns", "Insurance History", "Female Health", "Final Confirmation"
+    ];
+
+    // --- Event Listeners ---
+    createBtn.onclick = () => {
+        room = `acko-${Math.random().toString(36).substring(2, 8)}`;
+        const patientUrl = `${window.location.origin}/patient?room=${room}`;
+        patientLinkInput.value = patientUrl;
+        linkContainer.style.display = 'block';
+    };
+
+    copyBtn.onclick = () => {
+        patientLinkInput.select();
+        document.execCommand('copy');
+        copyBtn.innerHTML = '<i class="fas fa-check"></i>';
+        setTimeout(() => { copyBtn.innerHTML = '<i class="fas fa-copy"></i>'; }, 2000);
+    };
+
+    startCallBtn.onclick = () => {
+        setupEl.style.display = 'none';
+        consultationEl.style.display = 'grid';
+        renderChecklist("Introduction");
+        joinCall(room, "Doctor");
+    };
+    
+    summaryBtn.onclick = () => {
+        if(transSocket && transSocket.readyState === WebSocket.OPEN) {
+            transSocket.send(JSON.stringify({ type: "get_summary" }));
+            summaryModalContent.innerHTML = '<p class="text-gray-400">Generating summary, please wait...</p>';
+            summaryModal.style.display = 'flex';
+        }
+    };
+    
+    closeSummaryBtn.onclick = () => {
+        summaryModal.style.display = 'none';
+    };
+
+    // --- Core Functions ---
+    const getWsUrl = path => `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}${path}`;
+
+    function renderChecklist(activeStep) {
+        checklistEl.innerHTML = '<h3 class="font-bold mb-3 text-lg">Consultation Checklist</h3>';
+        checklistItems.forEach(item => {
+            const el = document.createElement('div');
+            el.textContent = item;
+            el.className = `checklist-item p-2 rounded-md cursor-pointer mb-1 ${item === activeStep ? 'active' : 'hover:bg-gray-700'}`;
+            el.onclick = () => {
+                renderChecklist(item);
+                if (transSocket && transSocket.readyState === WebSocket.OPEN) {
+                    transSocket.send(JSON.stringify({ type: "update_checklist", step: item }));
+                }
+            };
+            checklistEl.appendChild(el);
+        });
+    }
+
+    async function joinCall(room, speaker) {
+        try {
+            peerConnection = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+            const localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+            localVideo.srcObject = localStream;
+            localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+
+            peerConnection.ontrack = event => { remoteVideo.srcObject = event.streams[0]; };
+
+            signalSocket = new WebSocket(getWsUrl(`/ws/signal?room=${room}&speaker=${speaker}`));
+            peerConnection.onicecandidate = e => e.candidate && signalSocket.send(JSON.stringify({ 'ice': e.candidate }));
+            
+            signalSocket.onmessage = async e => {
+                const data = JSON.parse(e.data);
+                if (data.answer) await peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
+                else if (data.ice) await peerConnection.addIceCandidate(new RTCIceCandidate(data.ice));
+            };
+            
+            const offer = await peerConnection.createOffer();
+            await peerConnection.setLocalDescription(offer);
+            signalSocket.onopen = () => signalSocket.send(JSON.stringify({ 'offer': offer }));
+
+            transSocket = new WebSocket(getWsUrl("/ws/transcribe"));
+            transSocket.onopen = () => transSocket.send(JSON.stringify({ type: "join", room, speaker }));
+            
+            transSocket.onmessage = handleTranscriptionMessage;
+
+            const audioProcessorCode = `class AudioCaptureProcessor extends AudioWorkletProcessor{process(i){const c=i[0][0];if(c){const a=new Int11.6.1Array(c.length);for(let t=0;t<c.length;t++)a[t]=Math.max(-1,Math.min(1,c[t]))*32767;this.port.postMessage(a.buffer,[a.buffer])}return!0}}registerProcessor("capture-processor",AudioCaptureProcessor);`;
+            const blob = new Blob([audioProcessorCode], { type: 'application/javascript' });
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+            await audioCtx.audioWorklet.addModule(URL.createObjectURL(blob));
+            const workletNode = new AudioWorkletNode(audioCtx, "capture-processor");
+            workletNode.port.onmessage = e => {
+                if (transSocket.readyState === WebSocket.OPEN) {
+                    const b64 = btoa(String.fromCharCode.apply(null, new Uint8Array(e.data)));
+                    transSocket.send(JSON.stringify({ type: "audio", data: b64 }));
+                }
+            };
+            audioCtx.createMediaStreamSource(localStream).connect(workletNode);
+        } catch (error) {
+            console.error("Join call failed:", error);
+            alert("Could not start the call. Please check camera/microphone permissions.");
+        }
+    }
+
+    function handleTranscriptionMessage(event) {
+        const msg = JSON.parse(event.data);
+        if (msg.type === "transcript") {
+            appendTranscript(msg);
+        } else if (msg.type === "question") {
+            displayQuestions(msg.questions);
+        } else if (msg.type === "summary") {
+            const formattedSummary = msg.text.replace(/\n/g, '<br>');
+            summaryModalContent.innerHTML = formattedSummary;
+        }
+    }
+
+    function appendTranscript(msg) {
+        const p = document.createElement('p');
+        p.className = 'text-gray-200';
+        const speakerSpan = document.createElement('span');
+        speakerSpan.textContent = `${msg.speaker}: `;
+        speakerSpan.className = `font-bold ${msg.speaker === 'Doctor' ? 'text-blue-400' : 'text-green-400'}`;
+        p.appendChild(speakerSpan);
+        p.append(msg.text);
+
+        if (msg.speaker === 'Patient' && msg.sentiment) {
+            const badge = document.createElement('span');
+            badge.textContent = msg.sentiment;
+            badge.className = `sentiment-badge sentiment-${msg.sentiment}`;
+            p.appendChild(badge);
+        }
+        transcriptEl.appendChild(p);
+        transcriptEl.scrollTop = transcriptEl.scrollHeight;
+    }
+
+    function displayQuestions(questions) {
+        questionsEl.innerHTML = '';
+        questions.forEach(q => {
+            const btn = document.createElement('button');
+            btn.textContent = q;
+            btn.className = "w-full text-left bg-blue-900/50 hover:bg-blue-800/50 p-2 rounded-md transition-colors";
+            btn.onclick = () => {
+                appendTranscript({ speaker: 'Doctor', text: q });
+                if(transSocket && transSocket.readyState === WebSocket.OPEN) {
+                    // Send an empty audio message to trigger history update on backend
+                    transSocket.send(JSON.stringify({ 
+                        type: "add_to_history_manually", // Custom type for manual additions
+                        text: q 
+                    }));
+                }
+            };
+            questionsEl.appendChild(btn);
+        });
+    }
+
+</script>
+</body>
+</html>
+

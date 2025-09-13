@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ACKO Consultation</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      body {
+        font-family: "Inter", sans-serif;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+      }
+    </style>
+  </head>
+  <body
+    class="bg-gray-900 text-white flex flex-col items-center justify-center min-h-screen p-4"
+  >
+    <div class="text-center w-full max-w-4xl">
+      <h1 class="text-3xl md:text-4xl font-bold mb-2">ACKO Consultation</h1>
+      <p id="status" class="text-lg text-gray-400 mb-4">
+        Connecting to the doctor...
+      </p>
+
+      <!-- Video container with a fixed aspect ratio -->
+      <div
+        class="w-full bg-black rounded-lg shadow-xl overflow-hidden aspect-video relative"
+      >
+        <video
+          id="remoteVideo"
+          autoplay
+          playsinline
+          class="w-full h-full object-cover"
+        ></video>
+        <!-- Local video is a small picture-in-picture -->
+        <video
+          id="localVideo"
+          autoplay
+          playsinline
+          muted
+          class="absolute bottom-4 right-4 w-1/4 max-w-[150px] h-auto border-2 border-gray-700 rounded-md"
+        ></video>
+      </div>
+    </div>
+
+    <script>
+      // Get references to all necessary HTML elements
+      const statusEl = document.getElementById("status");
+      const localVideo = document.getElementById("localVideo");
+      const remoteVideo = document.getElementById("remoteVideo");
+
+      // Declare global variables for our connections
+      let transSocket, signalSocket, audioCtx, peerConnection;
+
+      // This function runs as soon as the page is loaded
+      window.onload = () => {
+        // Read the unique room code from the page's URL
+        const room = new URLSearchParams(window.location.search).get("room");
+        if (!room) {
+          statusEl.textContent = "Error: Invalid or missing consultation link.";
+          return;
+        }
+        // Start the process of joining the call
+        joinCall(room, "Patient");
+      };
+
+      // A helper function to build the correct WebSocket URL (ws:// or wss://)
+      const getWsUrl = (path) =>
+        `${location.protocol === "https:" ? "wss:" : "ws:"}//${
+          location.host
+        }${path}`;
+
+      async function joinCall(room, speaker) {
+        try {
+          // 1. Set up the WebRTC Peer Connection
+          peerConnection = new RTCPeerConnection({
+            iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+          });
+
+          // 2. Get access to the user's camera and microphone
+          const localStream = await navigator.mediaDevices.getUserMedia({
+            video: true,
+            audio: true,
+          });
+          localVideo.srcObject = localStream;
+          localStream
+            .getTracks()
+            .forEach((track) => peerConnection.addTrack(track, localStream));
+
+          // When the doctor's video stream arrives, display it in the main video element
+          peerConnection.ontrack = (event) => {
+            remoteVideo.srcObject = event.streams[0];
+            statusEl.textContent = "Connected to the doctor.";
+          };
+
+          // 3. Set up the Signaling WebSocket to coordinate the call
+          signalSocket = new WebSocket(
+            getWsUrl(`/ws/signal?room=${room}&speaker=${speaker}`)
+          );
+
+          // Send our network candidates to the other peer
+          peerConnection.onicecandidate = (event) => {
+            if (event.candidate) {
+              signalSocket.send(JSON.stringify({ ice: event.candidate }));
+            }
+          };
+
+          // Listen for messages from the signaling server
+          signalSocket.onmessage = async (event) => {
+            const data = JSON.parse(event.data);
+            if (data.offer) {
+              // If we receive an offer from the doctor...
+              await peerConnection.setRemoteDescription(
+                new RTCSessionDescription(data.offer)
+              );
+              const answer = await peerConnection.createAnswer();
+              await peerConnection.setLocalDescription(answer);
+              signalSocket.send(JSON.stringify({ answer: answer })); // ...send our answer back
+            } else if (data.ice) {
+              // If we receive a network candidate...
+              await peerConnection.addIceCandidate(
+                new RTCIceCandidate(data.ice)
+              ); // ...add it to our connection
+            }
+          };
+
+          // 4. Set up the Transcription WebSocket to send audio to the AI
+          transSocket = new WebSocket(getWsUrl("/ws/transcribe"));
+          transSocket.onopen = () => {
+            // Announce that we have joined the room for transcription
+            transSocket.send(JSON.stringify({ type: "join", room, speaker }));
+          };
+
+          // 5. Create and configure the Audio Processor to capture audio
+          // This is a self-contained AudioWorklet that processes audio in the background
+          const audioProcessorCode = `class AudioCaptureProcessor extends AudioWorkletProcessor {
+                process(inputs) {
+                    const inputChannel = inputs[0][0];
+                    if (inputChannel) {
+                        const int16Array = new Int16Array(inputChannel.length);
+                        for (let i = 0; i < inputChannel.length; i++) {
+                            int16Array[i] = Math.max(-1, Math.min(1, inputChannel[i])) * 0x7FFF;
+                        }
+                        this.port.postMessage(int16Array.buffer, [int16Array.buffer]);
+                    }
+                    return true;
+                }
+            }
+            registerProcessor("capture-processor", AudioCaptureProcessor);`;
+
+          const blob = new Blob([audioProcessorCode], {
+            type: "application/javascript",
+          });
+          const processorUrl = URL.createObjectURL(blob);
+
+          audioCtx = new (window.AudioContext || window.webkitAudioContext)({
+            sampleRate: 16000,
+          });
+          await audioCtx.audioWorklet.addModule(processorUrl);
+
+          const workletNode = new AudioWorkletNode(
+            audioCtx,
+            "capture-processor"
+          );
+          workletNode.port.onmessage = (event) => {
+            // When the processor sends us an audio chunk, we forward it to the transcription server
+            if (transSocket.readyState === WebSocket.OPEN) {
+              const base64 = btoa(
+                String.fromCharCode.apply(null, new Uint8Array(event.data))
+              );
+              transSocket.send(JSON.stringify({ type: "audio", data: base64 }));
+            }
+          };
+
+          // Connect the microphone's audio stream to our processor
+          const source = audioCtx.createMediaStreamSource(localStream);
+          source.connect(workletNode);
+        } catch (error) {
+          console.error("Failed to join call:", error);
+          statusEl.textContent =
+            "Error: Could not access camera or microphone. Please check permissions.";
+        }
+      }
+    </script>
+  </body>
+</html>
