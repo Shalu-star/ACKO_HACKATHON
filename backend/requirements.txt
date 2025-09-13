@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+websockets
+faster-whisper
+soundfile
+numpy
+google-generativeai
+torch
+transformers
+scipy
