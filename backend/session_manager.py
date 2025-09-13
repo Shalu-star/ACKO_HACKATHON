@@ -1,5 +1,9 @@
 from fastapi import WebSocket
 from typing import Dict, List, Any
+from docx import Document
+import uuid
+from pathlib import Path    
+from fastapi.responses import FileResponse
 
 class SessionManager:
   
@@ -91,6 +95,41 @@ class SessionManager:
             if not self.rooms[room_id]["signal_sockets"] and not self.rooms[room_id]["transcribe_sockets"]:
                 print(f"Room {room_id} is empty. Cleaning up session data.")
                 del self.rooms[room_id]
+
+
+    def generate_summary_text(self, room_id: str) -> str:
+        """Builds a clean text summary from the stored conversation history."""
+        history = self.get_history(room_id)
+        if not history:
+            return "No conversation history found."
+
+        lines = []
+        lines.append("=== ACKO Tele-MER Consultation Summary ===\n")
+        for entry in history:
+            speaker = entry.get("speaker", "Unknown")
+            text = entry.get("text", "")
+            sentiment = entry.get("sentiment")
+            if sentiment:
+                lines.append(f"{speaker} ({sentiment}): {text}")
+            else:
+                lines.append(f"{speaker}: {text}")
+
+        return "\n".join(lines)
+
+    def export_summary_docx(self, room_id: str) -> Path:
+        """Exports the summary as a .docx file and returns the path."""
+        summary_text = self.generate_summary_text(room_id)
+        filename = f"summary_{room_id}_{uuid.uuid4().hex[:6]}.docx"
+        filepath = Path(filename)
+
+        doc = Document()
+        doc.add_heading('ACKO Tele-MER Consultation Summary', level=1)
+        for line in summary_text.split("\n"):
+            doc.add_paragraph(line)
+        doc.save(filepath)
+
+        return filepath
+
 
 # Create a single, global instance of the manager that the main app will use.
 # This ensures all parts of the application share the same state.
