@@ -165,7 +165,7 @@
 
             peerConnection.ontrack = event => { remoteVideo.srcObject = event.streams[0]; };
 
-            signalSocket = new WebSocket(getWsUrl(`/ws/signal?room=${room}&speaker=${speaker}`));
+            signalSocket = new WebSocket(getWsUrl('/ws/signal?room=${room}&speaker=${speaker}'));
             peerConnection.onicecandidate = e => e.candidate && signalSocket.send(JSON.stringify({ 'ice': e.candidate }));
             
             signalSocket.onmessage = async e => {
@@ -179,11 +179,11 @@
             signalSocket.onopen = () => signalSocket.send(JSON.stringify({ 'offer': offer }));
 
             transSocket = new WebSocket(getWsUrl("/ws/transcribe"));
-            transSocket.onopen = () => transSocket.send(JSON.stringify({ type: "join", room, speaker }));
+            transSocket.onopen = () => transSocket.send(JSON.stringify({ type: "join", "room": room, "speaker": speaker }));
             
             transSocket.onmessage = handleTranscriptionMessage;
+            const audioProcessorCode='class AudioCaptureProcessor extends AudioWorkletProcessor{process(inputs){const input=inputs[0][0];if(input){const int16=new Int16Array(input.length);for(let t=0;t<input.length;t++)int16[t]=Math.max(-1,Math.min(1,input[t]))*32767;this.port.postMessage(int16.buffer,[int16.buffer]);}return true;}}registerProcessor("capture-processor",AudioCaptureProcessor);';
 
-            const audioProcessorCode = `class AudioCaptureProcessor extends AudioWorkletProcessor{process(i){const c=i[0][0];if(c){const a=new Int11.6.1Array(c.length);for(let t=0;t<c.length;t++)a[t]=Math.max(-1,Math.min(1,c[t]))*32767;this.port.postMessage(a.buffer,[a.buffer])}return!0}}registerProcessor("capture-processor",AudioCaptureProcessor);`;
             const blob = new Blob([audioProcessorCode], { type: 'application/javascript' });
             audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
             await audioCtx.audioWorklet.addModule(URL.createObjectURL(blob));
@@ -236,15 +236,17 @@
         questionsEl.innerHTML = '';
         questions.forEach(q => {
             const btn = document.createElement('button');
-            btn.textContent = q;
+            btn.textContent = q.question;
             btn.className = "w-full text-left bg-blue-900/50 hover:bg-blue-800/50 p-2 rounded-md transition-colors";
             btn.onclick = () => {
-                appendTranscript({ speaker: 'Doctor', text: q });
+                appendTranscript({ speaker: 'Doctor', text: q.question });
                 if(transSocket && transSocket.readyState === WebSocket.OPEN) {
                     // Send an empty audio message to trigger history update on backend
                     transSocket.send(JSON.stringify({ 
                         type: "add_to_history_manually", // Custom type for manual additions
-                        text: q 
+                        text: q.question,
+                        module: q.module,
+                        sentiment: q.sentiment
                     }));
                 }
             };

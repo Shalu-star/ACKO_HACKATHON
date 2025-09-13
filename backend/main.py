@@ -3,6 +3,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 import numpy as np
+from fastapi import Query
 
 # Import all our custom service modules
 from session_manager import session_manager
@@ -44,11 +45,7 @@ async def get_patient_page(request: Request):
 
 # --- WebSocket Endpoints ---
 @app.websocket("/ws/signal")
-async def ws_signal(ws: WebSocket, room: str, speaker: str):
-    """
-    WebSocket for WebRTC signaling. This helps the doctor and patient
-    browsers establish a direct peer-to-peer video call connection.
-    """
+async def ws_signal(ws: WebSocket, room: str = Query(...), speaker: str= Query(...)):
     await ws.accept()
     session_manager.add_signal_socket(room, speaker, ws)
     try:
