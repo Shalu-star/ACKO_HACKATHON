@@ -1,6 +1,6 @@
 import json
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 import numpy as np
 from fastapi import Query
@@ -129,6 +129,14 @@ async def ws_transcribe(ws: WebSocket):
                 session_manager.update_checklist_step(room_id, new_step)
                 print(f"Room {room_id} advanced to checklist step: {new_step}")
 
+            elif msg.get("type") == "get_summary":
+                summary_text = session_manager.generate_summary_text(room_id)
+                summary_event = {
+                    "type": "summary",
+                    "text": summary_text
+                }
+                await session_manager.broadcast_transcribe(room_id, json.dumps(summary_event))
+
     except WebSocketDisconnect:
         if room_id and speaker_id:
             session_manager.remove_transcribe_socket(room_id, speaker_id)
@@ -138,3 +146,15 @@ async def ws_transcribe(ws: WebSocket):
         if room_id and speaker_id:
             session_manager.remove_transcribe_socket(room_id, speaker_id)
 
+
+@app.get("/download_summary/{room_id}")
+async def download_summary(room_id: str):
+    filepath = session_manager.export_summary_docx(room_id)
+    return FileResponse(path=filepath, filename=filepath.name, media_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
+
+
+# @router.get("/generate-summary/{room_id}")
+# async def generate_summary(room_id: str):
+#     # This is a simplified example. You would need to ensure the history is populated first.
+#     filepath = session_manager.export_summary_docx(room_id)
+#     return FileResponse(filepath, media_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document', filename=filepath.name)

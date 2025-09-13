@@ -8,3 +8,4 @@ google-generativeai
 torch
 transformers
 scipy
+python-docx
