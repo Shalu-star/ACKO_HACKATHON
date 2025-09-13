@@ -1,102 +1,129 @@
+import re
 from typing import List, Dict
 
 class QuestionEngine:
-    """
-    The "brain" of the AI assistant. This version is a high-speed, rule-based
-    engine that generates reflexive questions based on the ACKO consultation script.
-    It uses a comprehensive dictionary to map patient-mentioned keywords to the
-    exact follow-up questions required by the underwriting process.
-    This implementation has NO external AI/LLM dependencies, making it
-    extremely fast and reliable.
-    """
     def __init__(self):
-        """Initializes the Question Engine with the predefined ACKO script rules."""
-        
-        # This comprehensive dictionary is the core of our rule-based engine.
-        # It maps keywords that a patient might say to a list of mandatory
-        # follow-up questions from the hackathon problem statement.
-        self.acko_script_rules = {
-            # Medical History Module Keywords
-            "diabetes": [
-                "When was it diagnosed?",
-                "What treatment was given - medical, surgical, or hospitalization?",
-                "Are any medications being taken? If yes, please specify names and dosages."
-            ],
-            "blood pressure": [
-                "When was it diagnosed?",
-                "What are your typical blood pressure readings?",
-                "Are any medications being taken? If yes, please specify names and dosages."
-            ],
-            "hypothyroid": ["When was it diagnosed?", "Are you taking any medication for it?"],
-            "hyperthyroid": ["When was it diagnosed?", "Are you taking any medication for it?"],
-            "thyroid": ["When was the thyroid condition diagnosed?", "What is your current medication dosage?"],
-            "asthma": [
-                "When was it diagnosed?",
-                "How often do you use an inhaler?",
-                "Have you ever been hospitalized for asthma?"
-            ],
-            "arthritis": [
-                "When was it diagnosed?",
-                "Which joints are affected?",
-                "How does it impact your daily activities?"
-            ],
-            "surgery": [
-                "What was the surgery for and when was it performed?",
-                "Were there any post-surgery complications?",
-                "Are there any current symptoms or recurrence?"
-            ],
-            "hospitalization": [
-                "What was the reason for the hospitalization?",
-                "What year was the hospitalization/surgery?",
-                "How many days was the hospitalization?"
-            ],
-            "tobacco": ["How frequently do you use tobacco? Daily, weekly, or a few times a year?"],
-            "alcohol": ["How frequently do you consume alcohol? Daily, weekly, or a few times a year?"],
-            "pregnant": [
-                "When is the baby due?",
-                "Are there any pregnancy-related complications?",
-                "Are there any pregnancy-related medications being taken?"
-            ],
-            # Add more specific keywords from the list for better coverage
-            "cataract": ["When was the cataract diagnosed or operated on?", "Are there any ongoing vision issues?"],
-            "glaucoma": ["When was glaucoma diagnosed?", "What treatment are you receiving?"],
-            "hernia": ["When was the hernia diagnosed or operated on?", "Are there any current symptoms?"],
-            "kidney": ["What is the specific kidney disorder?", "When was it diagnosed and what treatment was given?"],
-            "liver": ["What is the specific liver disorder?", "When was it diagnosed and what treatment was given?"],
-            "heart": ["What is the specific heart disease?", "Are you taking any medications for it?"],
-            "cancer": ["What type of cancer or tumor was it?", "What was the treatment and when was it completed?"]
+        # Inline full ACKO script (condensed per module)
+        self.script_rules = {
+            "basic_information": {
+                "questions": [
+                    "Could you please confirm your full name?",
+                    "Could you please confirm your date of birth?",
+                    "Please provide the height and weight details for all members to be covered."
+                ]
+            },
+            "lifestyle": {
+                "questions": [
+                    "Has anyone used tobacco products in the past year?",
+                    "How frequently? (Daily / Weekly / Few times a year)",
+                    "Has anyone consumed alcohol in the past year?",
+                    "How frequently? (Daily / Weekly / Few times a year)"
+                ]
+            },
+            "medical_history": {
+                "questions": [
+                    "Has anyone been diagnosed with any of the following conditions: Diabetes, High blood pressure, Thyroid disorder, Asthma, Cataract, Glaucoma, Arthritis, Spondylosis, Hernia, Kidney disorders, Liver disorders, Heart disease, Stroke, Epilepsy, Cancer, Mental health conditions, Anemia, Sleep apnea, Piles, Autoimmune disorders, or others?",
+                    "When was it diagnosed?",
+                    "What treatment was given - medical, surgical, or hospitalization?",
+                    "Are any medications being taken? Please specify names and dosages.",
+                    "Were there any surgical procedures or hospitalizations? Please provide the year and details.",
+                    "Are there any ongoing symptoms?",
+                    "Have there been any recurrences or complications?",
+                    "Have there been any relevant investigations in the last 3 months?",
+                    "Could you share your treating doctor's name and clinic/hospital details?"
+                ]
+            },
+            "recent_health_status": {
+                "questions": [
+                    "Have any members taken prescribed medicines in the past few weeks?",
+                    "Is anyone currently experiencing any of these symptoms: pain, fatigue, weight loss, dizziness, breathing difficulty, acidity, bleeding, vision issues, ENT issues, swelling, numbness, difficulty walking?"
+                ]
+            },
+            "hospitalization": {
+                "questions": [
+                    "Has anyone been advised to undergo or has undergone hospitalization for any illness or surgery?",
+                    "What was the surgery for and when was it performed?",
+                    "How many days was the hospitalization?",
+                    "Were there any post-surgery complications?",
+                    "Are there any current symptoms or recurrence?"
+                ]
+            },
+            "female_health": {
+                "questions": [
+                    "Is anyone currently pregnant?",
+                    "When is the baby due? (1-3, 3-6, or 6-9 months)",
+                    "Are there any pregnancy-related complications?",
+                    "Are there any pregnancy-related medications being taken?",
+                    "Has anyone experienced gynecological issues like menstrual complaints, breast lumps, fibroid uterus, or endometriosis?"
+                ]
+            },
+            "insurance_history": {
+                "questions": [
+                    "Do you have any existing health insurance coverage?",
+                    "Have you made any claims in the last 5 years?",
+                    "Has any health insurance proposal ever been declined, postponed, or accepted with special terms?"
+                ]
+            },
+            "final_confirmation": {
+                "questions": [
+                    "Is there anything else about your health you'd like to share?",
+                    "Please confirm that you've provided accurate information to the best of your knowledge."
+                ]
+            }
         }
 
-    async def generate_question(self, conversation_history: List[Dict], checklist_step: str) -> List[str]:
-        """
-        Generates the next suggested question(s) for the doctor based on keyword matching.
-        
-        Args:
-            conversation_history: The transcript of the conversation so far.
-            checklist_step: The current step in the consultation checklist.
+        # Track which modules we’ve already covered
+        self.already_covered = set()
 
-        Returns:
-            A list of suggested questions, or an empty list if no keyword is matched.
-        """
+        # Build keyword map for reflexive matching
+        self.keyword_map = self._build_keyword_index()
+
+    def _build_keyword_index(self) -> Dict[str, str]:
+        keyword_map = {}
+        for module, content in self.script_rules.items():
+            for q in content.get("questions", []):
+                for word in re.findall(r"\b[a-zA-Z]{4,}\b", q.lower()):
+                    if word not in keyword_map:
+                        keyword_map[word] = module
+        return keyword_map
+
+    def detect_sentiment(self, text: str) -> str:
+        distress_words = ["confused", "worried", "scared", "anxious", "don't know"]
+        if any(w in text for w in distress_words):
+            return "distress"
+        return "neutral"
+
+    async def generate_question(
+        self,
+        conversation_history: List[Dict],
+        checklist_step: str
+    ) -> List[Dict]:
         last_patient_response = ""
-        # Find the most recent thing the patient said.
         for entry in reversed(conversation_history):
             if entry.get("speaker") == "Patient":
                 last_patient_response = entry.get("text", "").lower()
                 break
-        
+
         if not last_patient_response:
             return []
 
-        # Iterate through our rulebook to find a matching keyword.
-        for keyword, questions in self.acko_script_rules.items():
-            if keyword in last_patient_response:
-                # If a keyword is found, return the associated follow-up questions immediately.
-                return questions
-        
-        # If no specific keywords are found in the patient's response,
-        # return an empty list. The doctor can then proceed with the standard script.
+        sentiment_flag = self.detect_sentiment(last_patient_response)
+
+        # Look for keywords in the last patient response
+        for word in re.findall(r"\b[a-zA-Z]{4,}\b", last_patient_response):
+            if word in self.keyword_map:
+                module = self.keyword_map[word]
+                if module not in self.already_covered:
+                    self.already_covered.add(module)
+                    return [
+                        {"question": q, "module": module, "sentiment": sentiment_flag}
+                        for q in self.script_rules[module]["questions"]
+                    ]
         return []
 
-# Create a single, global instance of the engine to be used by the main app.
+    def reset_session(self):
+        self.already_covered.clear()
+
+
+# Global instance
 question_engine = QuestionEngine()
